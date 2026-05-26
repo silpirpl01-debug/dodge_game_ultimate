@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dodge Game Ultimate</title>
+
+<style>
+
+body{
+margin:0;
+background:#111;
+display:flex;
+justify-content:center;
+align-items:center;
+height:100vh;
+overflow:hidden;
+font-family:Arial;
+}
+
+canvas{
+background:#0b0c10;
+border:3px solid white;
+}
+
+</style>
+</head>
+<body>
+
+<canvas id="c" width="480" height="520"></canvas>
+
+<script>
+
+// ── SETUP ─────────────────────────────
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+
+var W = canvas.width;
+var H = canvas.height;
+
+
+// ── STATE ─────────────────────────────
+var gameState = 'splash';
+var paused = false;
+
+
+// ── STORAGE ───────────────────────────
+var highScore =
+parseInt(localStorage.getItem('dodgeHS') || '0');
+
+
+// ── VARIABLES ─────────────────────────
+var keys = {};
+var lastTime = 0;
+
+var score = 0;
+var displayScore = 0;
+
+var level = 1;
+var lives = 3;
+
+var enemies = [];
+var particles = [];
+var floatTexts = [];
+var stars = [];
+var trails = [];
+
+var spawnTimer = 0;
+var scoreTimer = 0;
+var spawnRate = 1.2;
+
+var enemyCount = 0;
+
+var flashAlpha = 0;
+
+var slowmo = 0;
+
+var gameOverAnim = 0;
+
+
+// ── SHAKE ─────────────────────────────
+var shake = {
+
+timer:0,
+x:0,
+y:0,
+_int:7
+
+};
+
+
+// ── PLAYER ────────────────────────────
+var player = {
+
+x:W/2 - 18,
+y:H - 70,
+
+w:36,
+h:36,
+
+speed:240,
+
+color:'#4facfe',
+
+invincible:0
+
+};
+
+
+// ── AUDIO ─────────────────────────────
+var audioCtx = null;
+
+var bgmInterval = null;
+
+function beep(freq,dur,type){
+
+if(!audioCtx)
+audioCtx =
+new(window.AudioContext ||
+window.webkitAudioContext)();
+
+var o = audioCtx.createOscillator();
+var g = audioCtx.createGain();
+
+o.connect(g);
+g.connect(audioCtx.destination);
+
+o.frequency.value = freq;
+o.type = type || 'square';
+
+g.gain.value = 0.08;
+
+o.start();
+
+o.stop(audioCtx.currentTime + dur);
+
+}
+
+function sfxHit(){
+
+beep(120,0.15,'sawtooth');
+
+}
+
+function startBGM(){
+
+if(bgmInterval) return;
+
+var notes = [220,262,330,294];
+
+var i = 0;
+
+bgmInterval = setInterval(function(){
+
+beep(notes[i % notes.length],0.2,'sine');
+
+i++;
+
+},300);
+
+}
+
+
+// ── INIT ──────────────────────────────
+function initGame(){
+
+score = 0;
+displayScore = 0;
+
+level = 1;
+lives = 3;
+
+spawnTimer = 0;
+scoreTimer = 0;
+
+spawnRate = 1.2;
+
+enemyCount = 0;
+
+enemies = [];
+particles = [];
+floatTexts = [];
+stars = [];
+trails = [];
+
+slowmo = 0;
+
+gameOverAnim = 0;
+
+player.x = W/2 - 18;
+player.y = H - 70;
+
+player.invincible = 0;
+
+
+// STARS
+for (var i = 0; i < 50; i++) {
+
+stars.push({
+
+x: Math.random()*W,
+y: Math.random()*H,
+
+r: Math.random()*1.4+0.3,
+
+a: Math.random()*0.6+0.2
+
+});
+
+}
+
+}
+
+
+// ── COLLISION ─────────────────────────
+function isColliding(a,b){
+
+return (
+
+a.x < b.x + b.w &&
+a.x + a.w > b.x &&
+a.y < b.y + b.h &&
+a.y + a.h > b.y
+
+);
+
+}
+
+
+// ── PARTICLES ─────────────────────────
+function emitP(x, y, color, n) {
+
+for (var i = 0; i < n; i++) {
+
+var a = Math.random() * Math.PI * 2;
+
+var s = 50 + Math.random() * 100;
+
+particles.push({
+
+x:x,
+y:y,
+
+vx: Math.cos(a) * s,
+vy: Math.sin(a) * s,
+
+life: 0.55,
+ml: 0.55,
+
+r: 2 + Math.random() * 3,
+
+color: color
+
+});
+
+}
+
+}
+
+
+// ── FLOAT TEXT ────────────────────────
+function spawnFloat(x, y, text, color) {
+
+floatTexts.push({
+
+x:x,
+y:y,
+
+text:text,
+
+color: color,
+
+life: 0.9,
+ml: 0.9,
+
+vy: -55
+
+});
+
+}
+
+
+// ── UPDATE ────────────────────────────
+function update(dt){
+
+if(gameState !== 'playing') return;
+
+if(paused) return;
+
+
+// SLOWMO
+if(slowmo > 0){
+
+slowmo -= dt;
+
+dt *= 0.3;
+
+}
+
+
+// SHAKE
+if (shake.timer > 0) {
+
+shake.timer -= dt;
+
+shake.x =
+(Math.random()-0.5) * shake._int;
+
+shake.y =
+(Math.random()-0.5) * shake._int;
+
+}else{
+
+shake.x = 0;
+shake.y = 0;
+
+}
+
+
+// SCORE TWEEN
+displayScore +=
+(score - displayScore) *
+Math.min(1, dt * 6);
+
+
+// STARS
+for (var i = 0; i < stars.length; i++) {
+
+stars[i].y += 20 * dt;
+
+if (stars[i].y > H)
+stars[i].y = -2;
+
+}
+
+
+// PLAYER MOVE
+if(keys['ArrowLeft'] || keys['a'])
+player.x -= player.speed * dt;
+
+if(keys['ArrowRight'] || keys['d'])
+player.x += player.speed * dt;
+
+if(keys['ArrowUp'] || keys['w'])
+player.y -= player.speed * dt;
+
+if(keys['ArrowDown'] || keys['s'])
+player.y += player.speed * dt;
+
+
+// TRAIL
+trails.push({
+
+x: player.x + player.w/2,
+y: player.y + player.h/2
+
+});
+
+if(trails.length > 5)
+trails.shift();
+
+
+// LIMIT
+player.x = Math.max(
+0,
+Math.min(W-player.w, player.x)
+);
+
+player.y = Math.max(
+0,
+Math.min(H-player.h, player.y)
+);
+
+
+// LEVEL
+scoreTimer += dt;
+
+if(scoreTimer >= 10){
+
+scoreTimer = 0;
+
+level++;
+
+if(spawnRate > 0.4)
+spawnRate -= 0.1;
+
+spawnFloat(
+W/2,
+H/2,
+'LEVEL UP!',
+'#ffd166'
+);
+
+}
+
+
+// ENEMY SPEED
+var enemySpeed =
+150 + level * 20;
+
+
+// SPAWN
+spawnTimer += dt;
+
+if(spawnTimer >= spawnRate){
+
+spawnTimer = 0;
+
+enemyCount++;
+
+enemies.push({
+
+x:Math.random()*(W-30),
+y:-30,
+
+w:30,
+h:30,
+
+speed:enemySpeed,
+
+color:'#ff6b6b'
+
+});
+
+}
+
+
+// UPDATE ENEMY
+for(var i=enemies.length-1;i>=0;i--){
+
+var e = enemies[i];
+
+e.y += e.speed * dt;
+
+
+// REMOVE
+if(e.y > H + 60){
+
+enemies.splice(i,1);
+
+continue;
+
+}
+
+
+// COLLISION
+if(
+player.invincible <= 0 &&
+isColliding(player,e)
+){
+
+enemies.splice(i,1);
+
+lives--;
+
+player.invincible = 1.5;
+
+
+// FLASH
+flashAlpha = 0.5;
+
+
+// SHAKE
+shake.timer = 0.25;
+
+
+// PARTICLE COLOR
+var particleColor = '#4facfe';
+
+if(level == 2)
+particleColor = '#ffd166';
+
+if(level >= 3)
+particleColor = '#ff4d4d';
+
+
+// PARTICLES
+emitP(
+player.x + 18,
+player.y + 18,
+particleColor,
+10
+);
+
+
+// FLOAT TEXT
+spawnFloat(
+player.x,
+player.y,
+'-1 HP',
+'#ff6b6b'
+);
+
+
+// SOUND
+sfxHit();
+
+
+// SLOWMO
+slowmo = 2;
+
+
+// GAME OVER
+if(lives <= 0){
+
+gameState = 'gameover';
+
+if(score > highScore){
+
+highScore = Math.floor(score);
+
+localStorage.setItem(
+'dodgeHS',
+highScore
+);
+
+}
+
+}
+
+}
+
+}
+
+
+// UPDATE PARTICLES
+for (var i = particles.length-1; i >= 0; i--) {
+
+var p = particles[i];
+
+p.x += p.vx * dt;
+p.y += p.vy * dt;
+
+p.life -= dt;
+
+if (p.life <= 0)
+particles.splice(i, 1);
+
+}
+
+
+// UPDATE FLOAT
+for (var i = floatTexts.length-1; i >= 0; i--) {
+
+var f = floatTexts[i];
+
+f.y += f.vy * dt;
+
+f.life -= dt;
+
+if (f.life <= 0)
+floatTexts.splice(i, 1);
+
+}
+
+
+// FLASH
+if(flashAlpha > 0){
+
+flashAlpha -= dt;
+
+}
+
+
+// INVINCIBLE
+if(player.invincible > 0)
+player.invincible -= dt;
+
+
+// SCORE
+score += dt * 10;
+
+
+// GAME OVER ANIM
+if(gameState === 'gameover'){
+
+gameOverAnim += dt * 8;
+
+}
+
+}
+
+
+// ── RENDER ────────────────────────────
+function render(){
+
+ctx.clearRect(0,0,W,H);
+
+ctx.fillStyle = '#0b0c10';
+ctx.fillRect(0,0,W,H);
+
+
+// STARS
+for (var i = 0; i < stars.length; i++) {
+
+ctx.globalAlpha = stars[i].a;
+
+ctx.fillStyle = '#fff';
+
+ctx.beginPath();
+
+ctx.arc(
+stars[i].x,
+stars[i].y,
+stars[i].r,
+0,
+Math.PI*2
+);
+
+ctx.fill();
+
+}
+
+ctx.globalAlpha = 1;
+
+
+// SHAKE
+ctx.save();
+
+ctx.translate(
+shake.x,
+shake.y
+);
+
+
+// SPLASH
+if(gameState === 'splash'){
+
+ctx.fillStyle = 'white';
+
+ctx.textAlign = 'center';
+
+ctx.font = 'bold 42px Arial';
+
+ctx.fillText(
+'DODGE GAME',
+W/2,
+180
+);
+
+ctx.font = '22px Arial';
+
+ctx.fillText(
+'ENTER untuk mulai',
+W/2,
+260
+);
+
+ctx.restore();
+
+return;
+
+}
+
+
+// PARTICLES
+for (var i = 0; i < particles.length; i++) {
+
+var p = particles[i];
+
+ctx.globalAlpha =
+p.life / p.ml;
+
+ctx.fillStyle = p.color;
+
+ctx.beginPath();
+
+ctx.arc(
+p.x,
+p.y,
+p.r,
+0,
+Math.PI*2
+);
+
+ctx.fill();
+
+}
+
+ctx.globalAlpha = 1;
+
+
+// FLOAT TEXT
+for (var i = 0; i < floatTexts.length; i++) {
+
+var f = floatTexts[i];
+
+ctx.globalAlpha =
+f.life / f.ml;
+
+ctx.fillStyle = f.color;
+
+ctx.font = 'bold 22px Arial';
+
+ctx.textAlign = 'center';
+
+ctx.fillText(
+f.text,
+f.x,
+f.y
+);
+
+}
+
+ctx.globalAlpha = 1;
+
+
+// TRAIL
+for(var i = 0; i < trails.length; i++){
+
+ctx.globalAlpha = i / trails.length;
+
+ctx.fillStyle = '#4facfe';
+
+ctx.beginPath();
+
+ctx.arc(
+trails[i].x,
+trails[i].y,
+10,
+0,
+Math.PI * 2
+);
+
+ctx.fill();
+
+}
+
+ctx.globalAlpha = 1;
+
+
+// PLAYER
+ctx.shadowBlur  = 12;
+ctx.shadowColor = '#4facfe';
+
+ctx.fillStyle = player.color;
+
+ctx.fillRect(
+player.x,
+player.y,
+player.w,
+player.h
+);
+
+ctx.shadowBlur = 0;
+
+
+// ENEMIES
+for(var i=0;i<enemies.length;i++){
+
+ctx.shadowBlur  = 10;
+ctx.shadowColor = '#ff4444';
+
+ctx.fillStyle = enemies[i].color;
+
+ctx.fillRect(
+enemies[i].x,
+enemies[i].y,
+enemies[i].w,
+enemies[i].h
+);
+
+ctx.shadowBlur = 0;
+
+}
+
+ctx.restore();
+
+
+// HUD
+ctx.fillStyle =
+'rgba(0,0,0,0.65)';
+
+ctx.fillRect(0,0,W,52);
+
+
+// SCORE
+ctx.fillStyle = '#fff';
+
+ctx.font = 'bold 16px Arial';
+
+ctx.fillText(
+'Skor: ' + Math.floor(displayScore),
+14,
+32
+);
+
+
+// LEVEL
+ctx.fillStyle = '#ffd166';
+
+ctx.fillText(
+'Level ' + level,
+200,
+32
+);
+
+
+// LIVES
+ctx.fillStyle = '#ff6b6b';
+
+ctx.fillText(
+'HP: ' + lives,
+380,
+32
+);
+
+
+// PAUSE
+if(paused){
+
+ctx.fillStyle =
+'rgba(0,0,0,0.7)';
+
+ctx.fillRect(0,0,W,H);
+
+ctx.fillStyle = '#fff';
+
+ctx.textAlign = 'center';
+
+ctx.font = 'bold 42px Arial';
+
+ctx.fillText(
+'PAUSED',
+W/2,
+H/2
+);
+
+}
+
+
+// GAME OVER
+if(gameState === 'gameover'){
+
+ctx.fillStyle = 'white';
+
+ctx.textAlign = 'center';
+
+ctx.font = 'bold 42px Arial';
+
+var goText = 'GAME OVER';
+
+var visibleText =
+goText.substring(
+0,
+Math.floor(gameOverAnim)
+);
+
+ctx.fillText(
+visibleText,
+W/2,
+220
+);
+
+ctx.font = '24px Arial';
+
+ctx.fillText(
+'Skor : ' + Math.floor(score),
+W/2,
+280
+);
+
+ctx.fillText(
+'High Score : ' + highScore,
+W/2,
+320
+);
+
+ctx.fillText(
+'Tekan R untuk Restart',
+W/2,
+380
+);
+
+}
+
+
+// FLASH
+if(flashAlpha > 0){
+
+ctx.fillStyle =
+'rgba(255,0,0,' +
+flashAlpha + ')';
+
+ctx.fillRect(0,0,W,H);
+
+}
+
+}
+
+
+// ── LOOP ──────────────────────────────
+function loop(ts){
+
+var dt =
+Math.min((ts-lastTime)/1000,0.05);
+
+lastTime = ts;
+
+update(dt);
+
+render();
+
+requestAnimationFrame(loop);
+
+}
+
+
+// ── INPUT ─────────────────────────────
+document.addEventListener(
+'keydown',
+function(e){
+
+keys[e.key] = true;
+
+
+// START
+if(
+gameState === 'splash' &&
+(e.key === 'Enter' || e.key === ' ')
+){
+
+initGame();
+
+startBGM();
+
+gameState = 'playing';
+
+}
+
+
+// PAUSE
+if(
+gameState === 'playing' &&
+(e.key === 'p' || e.key === 'P')
+){
+
+paused = !paused;
+
+}
+
+
+// RESTART
+if(
+gameState === 'gameover' &&
+(e.key === 'r' || e.key === 'R')
+){
+
+initGame();
+
+gameState = 'playing';
+
+}
+
+}
+);
+
+
+document.addEventListener(
+'keyup',
+function(e){
+
+keys[e.key] = false;
+
+}
+);
+
+
+// ── START ─────────────────────────────
+requestAnimationFrame(function(ts){
+
+lastTime = ts;
+
+requestAnimationFrame(loop);
+
+});
+
+</script>
+</body>
+</html>
